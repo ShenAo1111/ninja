@@ -42,6 +42,7 @@ struct Pool {
     : name_(name), current_use_(0), depth_(depth), delayed_() {}
 
   // A depth of 0 is infinite
+  // 啥意思：池子容量，最大能跑多少权重（0 表示无限）
   bool is_valid() const { return depth_ >= 0; }
   int depth() const { return depth_; }
   const std::string& name() const { return name_; }
@@ -87,11 +88,20 @@ struct Pool {
     }
   };
 
+  // 啥意思：一个等待队列，存着暂时跑不了的命令（Edge）。  
+  // 类型：std::set<Edge*, WeightedEdgeCmp>，按权重排序
   typedef std::set<Edge*, WeightedEdgeCmp> DelayedEdges;
   DelayedEdges delayed_;
 };
 
 /// Global state (file status) for a single run.
+// State 是 Ninja 的“大脑”或者“蓝图”。它负责记住整个构建系统的所有信息，包括：
+// 所有文件（Node）和它们的路径。
+// 所有规则（Edge），比如怎么把 .c 文件编译成 .o 文件。
+// 资源池（Pool），控制同时能跑多少命令。
+// 变量（bindings_），比如 cc = gcc 这样的设置。
+// 默认目标（defaults_），比如你跑 ninja 时默认建啥。
+// 简单来说，State 就像一个大账本，记下了所有文件、规则和配置，Builder 靠它知道该干啥
 struct State {
   static Pool kDefaultPool;
   static Pool kConsolePool;
@@ -128,16 +138,29 @@ struct State {
   std::vector<Node*> DefaultNodes(std::string* error) const;
 
   /// Mapping of path -> Node.
+  // 例子：paths_["main.o"] 返回 main.o 的 Node 对象
   typedef ExternalStringHashMap<Node*>::Type Paths;
   Paths paths_;
 
   /// All the pools used in the graph.
+// std::map<std::string, Pool*> pools_;  
+// 啥意思：一个池子表格，键是池子名字（比如 "console"），值是池子对象（Pool）。  
+// 干嘛用：控制命令的并发，比如只能跑 1 个控制台命令。  
+// 例子：pools_["console"] 是控制台池子。
   std::map<std::string, Pool*> pools_;
 
   /// All the edges of the graph.
   std::vector<Edge*> edges_;
 
+  // BindingEnv bindings_;  
+  // 啥意思：一个变量表，存着名字和值的映射（比如 cc = gcc）。  
+  // 干嘛用：规则里可以用变量，比如 $cc main.c。  
+  // 例子：bindings_.LookupVariable("cc") 返回 "gcc"
   BindingEnv bindings_;
+  // std::vector<Node*> defaults_;  
+// 啥意思：默认目标列表，存着你跑 ninja 时默认建的文件。  
+// 干嘛用：没指定目标时，建这些。  
+// 例子：defaults_ 里有 main.o
   std::vector<Node*> defaults_;
 };
 

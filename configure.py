@@ -33,7 +33,10 @@ if TYPE_CHECKING:
 else:
     import ninja_syntax
 
+# 构造函数接收一个可选参数 platform。
 
+# 如果调用者显式指定了平台，则直接使用该值。
+# 如果未指定，则根据 sys.platform 的值进行判断，转换为更标准的字符串（如 'linux'、'msvc'、'mingw' 等）
 class Platform(object):
     """Represents a host/target platform and its specific build attributes."""
     def __init__(self, platform: Optional[str]) -> None:
@@ -117,7 +120,12 @@ class Platform(object):
 
     def can_rebuild_in_place(self) -> bool:
         return not (self.is_windows() or self.is_aix())
+# 作用与背景
+# Bootstrap 类主要用于“自举”模式（--bootstrap），即从零开始构建 Ninja 本身。它充当了 ninja_syntax.Writer 的一个封装（shim），既能向底层的 writer 转发调用，也在构建过程中实际执行相应的命令。
 
+# 构造函数
+
+# 接受一个 ninja_syntax.Writer 实例，所有后续对 Ninja 构建文件（build.ninja）的写入都会经过该 writer。
 class Bootstrap:
     """API shim for ninja_syntax.Writer that instead runs the commands.
 
@@ -244,6 +252,7 @@ if options.host:
 else:
     host = platform
 
+# 生成一个build.ninja文件
 BUILD_FILENAME = 'build.ninja'
 ninja_writer = ninja_syntax.Writer(open(BUILD_FILENAME, 'w'))
 n: Union[ninja_syntax.Writer, Bootstrap] = ninja_writer

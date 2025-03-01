@@ -91,6 +91,18 @@ bool DyndepParser::ParseDyndepVersion(string* err) {
   }
   return true;
 }
+// ParseLet 方法：解析变量赋值
+// cpp
+// bool DyndepParser::ParseLet(string* key, EvalString* value, string* err)
+// 这个方法解析形如 key = value 的语句，比如 restat = 1。
+// 读变量名
+// lexer_.ReadIdent(key)：读取标识符（比如 restat），存到 key。
+// 检查等号
+// ExpectToken(Lexer::EQUALS, err)：期待一个 =，没有就报错。
+// 读值
+// lexer_.ReadVarValue(value, err)：读取等号后面的值（可能包含变量，比如 $var），存到 value。
+// 返回结果
+// 成功返回 true，失败返回 false。
 
 bool DyndepParser::ParseLet(string* key, EvalString* value, string* err) {
   if (!lexer_.ReadIdent(key))
@@ -98,6 +110,19 @@ bool DyndepParser::ParseLet(string* key, EvalString* value, string* err) {
   return (ExpectToken(Lexer::EQUALS, err) && lexer_.ReadVarValue(value, err));
 }
 
+// 这是解析动态依赖文件里**最重要**的部分，处理形如 build 输出: dyndep | 隐式输出 || 隐式输入 的语句
+// 假设输入是：
+// build main.o: dyndep | extra.o || header.h
+//   restat = 1
+
+
+
+// 对于上面的例子，dyndep_file_ 会存：
+// 键：生成 main.o 的规则（Edge*）。
+// 值：Dyndeps：
+// implicit_outputs_ = [extra.o]
+// implicit_inputs_ = [header.h]
+// restat_ = true
 bool DyndepParser::ParseEdge(string* err) {
   // Parse one explicit output.  We expect it to already have an edge.
   // We will record its dynamically-discovered dependency information.
@@ -126,6 +151,7 @@ bool DyndepParser::ParseEdge(string* err) {
   }
 
   // Disallow explicit outputs.
+  // 只允许一个显式输出：动态依赖文件是对已有规则的补充，不是定义新规则
   {
     EvalString out;
     if (!lexer_.ReadPath(&out, err))

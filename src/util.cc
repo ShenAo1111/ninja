@@ -136,10 +136,20 @@ static bool IsPathSeparator(char c) {
   return c == '/';
 #endif
 }
+// CanonicalizePath 函数的作用是将路径转换为标准形式，主要处理：
 
+// 移除冗余的路径分隔符
+// 解析 . 和 .. 路径部分
+// 在不同平台上提供一致的路径表示
 void CanonicalizePath(char* path, size_t* len, uint64_t* slash_bits) {
   // WARNING: this function is performance-critical; please benchmark
   // any changes you make to it.
+  // 注释中提醒这段代码是性能关键路径，任何修改都需要经过基准测试
+// 去除冗余： 删除多余的斜杠、. 组件；
+// 处理“..”： 在可能的情况下删除前面的目录名；
+// 保持格式： 绝对路径保留最开始的分隔符，特殊处理 Windows 网络路径；
+// 性能优化： 使用 memchr() 及内存操作函数（memmove()）来加速字符串处理；
+// 跨平台兼容： Windows 下兼容 '\\' 和 '/'，并记录原始斜杠信息。
   if (*len == 0) {
     return;
   }
@@ -958,3 +968,5 @@ int platformAwareUnlink(const char* filename) {
 		return unlink(filename);
 	#endif
 }
+
+Profiler profiler;

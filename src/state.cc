@@ -23,11 +23,13 @@
 
 using namespace std;
 
+// 加命令的权重到 current_use_。
 void Pool::EdgeScheduled(const Edge& edge) {
   if (depth_ != 0)
     current_use_ += edge.weight();
 }
 
+// 减去命令的权重
 void Pool::EdgeFinished(const Edge& edge) {
   if (depth_ != 0)
     current_use_ -= edge.weight();
@@ -38,6 +40,25 @@ void Pool::DelayEdge(Edge* edge) {
   delayed_.insert(edge);
 }
 
+// 完整例子
+// 假设：  
+// depth_ = 5（容量 5）。  
+// current_use_ = 3（用了 3）。  
+// delayed_ = [edge1(weight=1), edge2(weight=2), edge3(weight=3)]。
+// 执行：  
+// it = edge1，3 + 1 = 4 < 5，放 edge1，current_use_ = 4，it 移到 edge2。  
+// it = edge2，4 + 2 = 6 > 5，超了，break。  
+// erase(begin(), it)，删掉 edge1，剩下 [edge2, edge3]。
+// 结果：  
+// ready_queue 里有 edge1。  
+// current_use_ = 4。  
+// delayed_ = [edge2, edge3]。
+// 逻辑理解
+// 核心：每次挑一个命令，看加进去会不会超容量，能就放出去，不能就停。  
+// 比喻：你有 5 个工位，已经用了 3 个：  
+// 来了个小活（占 1 个），4 < 5，能干，放出去。  
+// 又来了个中活（占 2 个），6 > 5，超了，等等再说。  
+// 把干了的活从等待名单划掉。
 void Pool::RetrieveReadyEdges(EdgePriorityQueue* ready_queue) {
   DelayedEdges::iterator it = delayed_.begin();
   while (it != delayed_.end()) {
@@ -64,6 +85,8 @@ void Pool::Dump() const {
 Pool State::kDefaultPool("", 0);
 Pool State::kConsolePool("console", 1);
 
+// 加一个假规则（phony）到 bindings_，用来标记不用真干活的目标。  
+// 加两个默认池子：kDefaultPool（无限容量）、kConsolePool（容量 1）
 State::State() {
   bindings_.AddRule(Rule::Phony());
   AddPool(&kDefaultPool);
@@ -82,6 +105,9 @@ Pool* State::LookupPool(const string& pool_name) {
   return i->second;
 }
 
+// 创建 Edge（比如 build main.o: compile main.c）。  
+// 设置规则（rule_）、默认池子（kDefaultPool）、变量环境（bindings_）。  
+// 给个编号（id_），加到 edges_。
 Edge* State::AddEdge(const Rule* rule) {
   Edge* edge = new Edge();
   edge->rule_ = rule;
@@ -92,12 +118,15 @@ Edge* State::AddEdge(const Rule* rule) {
   return edge;
 }
 
+// 先查 paths_ 有没有这个路径。  
+// 有就返回，没就新建一个 Node，加到 paths_。  
+// slash_bits 是路径斜杠的标记（区分正反斜杠）。
 Node* State::GetNode(StringPiece path, uint64_t slash_bits) {
   Node* node = LookupNode(path);
   if (node)
     return node;
   node = new Node(path.AsString(), slash_bits);
-  paths_[node->path()] = node;
+  paths_[node->path()] = node; // 在这个地方加的paths
   return node;
 }
 
@@ -125,6 +154,9 @@ Node* State::SpellcheckNode(const string& path) {
   return result;
 }
 
+// 找或创建 node（比如 main.c）。  
+// 标记不是动态依赖生成的。  
+// 加到 edge->inputs_，告诉 node 它被这条规则用。
 void State::AddIn(Edge* edge, StringPiece path, uint64_t slash_bits) {
   Node* node = GetNode(path, slash_bits);
   node->set_generated_by_dep_loader(false);
@@ -132,6 +164,9 @@ void State::AddIn(Edge* edge, StringPiece path, uint64_t slash_bits) {
   node->AddOutEdge(edge);
 }
 
+// 找或创建 node（比如 main.o）。  
+// 检查有没有别的规则生成它，有就报错（Ninja 不允许一个文件多个生成者）。  
+// 加到 edge->outputs_，告诉 node 谁生成它。
 bool State::AddOut(Edge* edge, StringPiece path, uint64_t slash_bits,
                    std::string* err) {
   Node* node = GetNode(path, slash_bits);
@@ -166,6 +201,11 @@ bool State::AddDefault(StringPiece path, string* err) {
   return true;
 }
 
+// 做什么：找“根节点”（没被别的规则依赖的文件）。  
+// 细节：  
+// 遍历所有规则的输出，找没有后续依赖的（out_edges().empty()）。  
+// 如果有规则但没根节点，报错。
+// 例子：main.o 没人依赖，它就是根节点。
 vector<Node*> State::RootNodes(string* err) const {
   vector<Node*> root_nodes;
   // Search for nodes with no output.

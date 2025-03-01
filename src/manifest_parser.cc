@@ -101,9 +101,13 @@ bool ManifestParser::ParsePool(string* err) {
   if (!lexer_.ReadIdent(&name))
     return lexer_.Error("expected pool name", err);
 
+  // 读完名字后，期待一个换行符（表示这行结束了）。
+  // 如果没有换行符，就返回失败。  
   if (!ExpectToken(Lexer::NEWLINE, err))
     return false;
 
+  // 检查这个 pool 名字是不是已经存在了。
+  // 如果存在，就报错：“这个 pool 名‘xxx’重复了，不能用
   if (state_->LookupPool(name) != NULL)
     return lexer_.Error("duplicate pool '" + name + "'", err);
 
@@ -115,6 +119,7 @@ bool ManifestParser::ParsePool(string* err) {
     if (!ParseLet(&key, &value, err))
       return false;
 
+    // 用 ParseLet 读取像 key = value 这样的赋值语句，比如 depth = 4
     if (key == "depth") {
       string depth_string = value.Evaluate(env_);
       depth = atol(depth_string.c_str());
@@ -125,9 +130,11 @@ bool ManifestParser::ParsePool(string* err) {
     }
   }
 
+// 循环结束后，如果 depth 还是 -1，说明没设置 "depth ="，就报错：“你得告诉我 depth 是多少！
   if (depth < 0)
     return lexer_.Error("expected 'depth =' line", err);
 
+    // 一切正常的话，用名字和深度创建一个新的 Pool 对象，加到 state_ 里
   state_->AddPool(new Pool(name, depth));
   return true;
 }
@@ -214,6 +221,7 @@ bool ManifestParser::ParseEdge(string* err) {
   outs_.clear();
   validations_.clear();
 
+  // 读取输出文件（显式输出）
   {
     EvalString out;
     if (!lexer_.ReadPath(&out, err))
@@ -227,6 +235,7 @@ bool ManifestParser::ParseEdge(string* err) {
     }
   }
 
+// 读取隐式输出（用 | 分隔）
   // Add all implicit outs, counting how many as we go.
   int implicit_outs = 0;
   if (lexer_.PeekToken(Lexer::PIPE)) {
@@ -241,6 +250,7 @@ bool ManifestParser::ParseEdge(string* err) {
     }
   }
 
+// 如果没输出文件，报错：“得告诉我生成啥文件！
   if (outs_.empty())
     return lexer_.Error("expected path", err);
 
@@ -251,6 +261,7 @@ bool ManifestParser::ParseEdge(string* err) {
   if (!lexer_.ReadIdent(&rule_name))
     return lexer_.Error("expected build command name", err);
 
+  // 找不到规则就报错：“这个规则‘xxx’我不认识！
   const Rule* rule = env_->LookupRule(rule_name);
   if (!rule)
     return lexer_.Error("unknown build rule '" + rule_name + "'", err);
@@ -293,6 +304,7 @@ bool ManifestParser::ParseEdge(string* err) {
     }
   }
 
+  // 如果有 |@，读验证文件（用于检查），存到 validations_
   // Add all validations, counting how many as we go.
   if (lexer_.PeekToken(Lexer::PIPEAT)) {
     for (;;) {
@@ -308,6 +320,7 @@ bool ManifestParser::ParseEdge(string* err) {
   if (!ExpectToken(Lexer::NEWLINE, err))
     return false;
 
+  // 处理额外绑定（缩进行）如果有缩进（比如 pool = mypool），读键值对，存到环境变量 env 中
   // Bindings on edges are rare, so allocate per-edge envs only when needed.
   bool has_indent_token = lexer_.PeekToken(Lexer::INDENT);
   BindingEnv* env = has_indent_token ? new BindingEnv(env_) : env_;
@@ -324,6 +337,7 @@ bool ManifestParser::ParseEdge(string* err) {
   Edge* edge = state_->AddEdge(rule);
   edge->env_ = env;
 
+  // 如果指定了 pool（比如限制并行），检查是否存在，不存在就报错
   string pool_name = edge->GetBinding("pool");
   if (!pool_name.empty()) {
     Pool* pool = state_->LookupPool(pool_name);
@@ -332,6 +346,8 @@ bool ManifestParser::ParseEdge(string* err) {
     edge->pool_ = pool;
   }
 
+// 把 outs_ 的路径解析、规范化，添加到 edge->outputs_。
+// 如果路径为空或添加失败，报错。
   edge->outputs_.reserve(outs_.size());
   for (size_t i = 0, e = outs_.size(); i != e; ++i) {
     string path = outs_[i].Evaluate(env);
@@ -345,9 +361,11 @@ bool ManifestParser::ParseEdge(string* err) {
     }
   }
 
+// TODO: 但是如果是empty的话，那上面addout的时候就会返回了，为什么还会到下面这里呢？
   if (edge->outputs_.empty()) {
     // All outputs of the edge are already created by other edges. Don't add
     // this edge.  Do this check before input nodes are connected to the edge.
+    // 如果这个列表是空的，说明这个边没有有效的输出文件，可能因为这些输出已经被其他边生成过了
     state_->edges_.pop_back();
     delete edge;
     return true;

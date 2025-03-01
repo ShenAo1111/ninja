@@ -28,6 +28,7 @@ struct RealCommandRunner : public CommandRunner {
   std::map<const Subprocess*, Edge*> subproc_to_edge_;
 };
 
+// 遍历 subproc_to_edge_ 映射，将所有当前正在执行的命令对应的 Edge 收集到一个 std::vector 中并返回
 std::vector<Edge*> RealCommandRunner::GetActiveEdges() {
   std::vector<Edge*> edges;
   for (std::map<const Subprocess*, Edge*>::iterator e =

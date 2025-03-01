@@ -95,7 +95,7 @@ struct RealDiskInterface : public DiskInterface {
   bool long_paths_enabled_;
 
   typedef std::map<std::string, TimeStamp> DirCache;
-  // TODO: Neither a map nor a hashmap seems ideal here.  If the statcache
+  /// TODO: Neither a map nor a hashmap seems ideal here.  If the statcache
   // works out, come up with a better data structure.
   typedef std::map<std::string, DirCache> Cache;
   mutable Cache cache_;

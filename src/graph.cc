@@ -46,9 +46,24 @@ void Node::UpdatePhonyMtime(TimeStamp mtime) {
   }
 }
 
+// RecomputeDirty：总侦探，从起点查所有节点。  
+// RecomputeNodeDirty：分侦探，细查一个节点的状态。
+// initial_node: 初始节点，从这个节点开始检查
+// VisitInStack 的作用
+// VisitInStack 是 Edge 对象的标记状态之一，表示这个边当前正在递归调用栈中被处理。它的主要作用是：
+// 检测循环依赖: 如果在递归过程中再次遇到一个标记为 VisitInStack 的边，说明存在循环，程序会报错。
+
+// 防止重复访问: 通过标记和栈管理，确保每个边只被完整处理一次，避免重复递归。
+
+// 在代码中，Edge 有三种标记状态：
+// 未标记（初始状态）：还没访问过。
+// VisitInStack：正在递归处理，当前在栈中。
+// VisitDone：已经处理完成，出栈了。
 bool DependencyScan::RecomputeDirty(Node* initial_node,
                                     std::vector<Node*>* validation_nodes,
                                     string* err) {
+  // 创建一个空的stack向量，用于检测循环依赖
+  // 创建一个nodes队列，初始只包含传入的initial_node, nodes和stack是两个东西，作用不一样
   std::vector<Node*> stack;
   std::vector<Node*> new_validation_nodes;
 
@@ -65,6 +80,7 @@ bool DependencyScan::RecomputeDirty(Node* initial_node,
 
     if (!RecomputeNodeDirty(node, &stack, &new_validation_nodes, err))
       return false;
+    // 只会增加验证节点，如果RecomputeNodeDirty发现了新的验证节点，把它们添加到nodes队列末尾，以便后续处理
     nodes.insert(nodes.end(), new_validation_nodes.begin(),
                               new_validation_nodes.end());
     if (!new_validation_nodes.empty()) {
@@ -83,6 +99,7 @@ bool DependencyScan::RecomputeNodeDirty(Node* node, std::vector<Node*>* stack,
                                         std::vector<Node*>* validation_nodes,
                                         string* err) {
   Edge* edge = node->in_edge();
+  // 节点没有输入边且不存在：如果节点是一个源文件（没有输入边），并且该文件不存在，则标记为dirty
   if (!edge) {
     // If we already visited this leaf node then we are done.
     if (node->status_known())
@@ -98,6 +115,7 @@ bool DependencyScan::RecomputeNodeDirty(Node* node, std::vector<Node*>* stack,
   }
 
   // If we already finished this edge then we are done.
+  // 如果 edge 已标记为 VisitDone，说明这个边之前已经处理完成，直接返回 true，避免重复访问。
   if (edge->mark_ == Edge::VisitDone)
     return true;
 
@@ -112,7 +130,7 @@ bool DependencyScan::RecomputeNodeDirty(Node* node, std::vector<Node*>* stack,
   bool dirty = false;
   edge->outputs_ready_ = true;
   edge->deps_missing_ = false;
-
+  
   if (!edge->deps_loaded_) {
     // This is our first encounter with this edge.
     // If there is a pending dyndep file, visit it now:
@@ -148,6 +166,7 @@ bool DependencyScan::RecomputeNodeDirty(Node* node, std::vector<Node*>* stack,
   if (!edge->deps_loaded_) {
     // This is our first encounter with this edge.  Load discovered deps.
     edge->deps_loaded_ = true;
+    // 依赖加载失败：如果无法加载节点的依赖信息，则标记为dirty以便重新生成依赖信息。
     if (!dep_loader_.LoadDeps(edge, err)) {
       if (!err->empty())
         return false;
@@ -164,7 +183,7 @@ bool DependencyScan::RecomputeNodeDirty(Node* node, std::vector<Node*>* stack,
   // and recurse into them.
   validation_nodes->insert(validation_nodes->end(),
       edge->validations_.begin(), edge->validations_.end());
-
+  // 任何常规输入是dirty：如果节点的任何一个常规输入（非order-only输入）被标记为dirty，则当前节点也被标记为dirty
   // Visit all inputs; we're dirty if any of the inputs are dirty.
   Node* most_recent_input = NULL;
   for (vector<Node*>::iterator i = edge->inputs_.begin();
@@ -186,6 +205,7 @@ bool DependencyScan::RecomputeNodeDirty(Node* node, std::vector<Node*>* stack,
         explanations_.Record(node, "%s is dirty", (*i)->path().c_str());
         dirty = true;
       } else {
+        // 输出文件比最新的输入文件旧：虽然在代码片段中没有直接显示，但通常构建系统会比较输出文件与最新输入文件的修改时间。这里收集了最新输入：
         if (!most_recent_input || (*i)->mtime() > most_recent_input->mtime()) {
           most_recent_input = *i;
         }
@@ -216,6 +236,7 @@ bool DependencyScan::RecomputeNodeDirty(Node* node, std::vector<Node*>* stack,
 
   // Mark the edge as finished during this walk now that it will no longer
   // be in the call stack.
+  // 检查完成，标记边为 VisitDone，从调用栈移除节点
   edge->mark_ = Edge::VisitDone;
   assert(stack->back() == node);
   stack->pop_back();
@@ -223,6 +244,8 @@ bool DependencyScan::RecomputeNodeDirty(Node* node, std::vector<Node*>* stack,
   return true;
 }
 
+// VerifyDAG：看有没有循环依赖（比如 A -> B -> A），有就报错
+// VerifyDAG 检查当前节点是否已经在 stack 中。如果是，说明递归路径中重复访问了这个节点，可能是循环依赖，返回 false 并报错。
 bool DependencyScan::VerifyDAG(Node* node, vector<Node*>* stack, string* err) {
   Edge* edge = node->in_edge();
   assert(edge != NULL);
@@ -330,7 +353,7 @@ bool DependencyScan::RecomputeOutputDirty(const Edge* edge,
                          most_recent_input->mtime());
     return true;
   }
-
+  /// TODO: 待看
   if (build_log()) {
     bool generator = edge->GetBindingBool("generator");
     if (entry || (entry = build_log()->LookupByOutput(output->path()))) {
@@ -614,6 +637,7 @@ void Node::Dump(const char* prefix) const {
 }
 
 bool ImplicitDepLoader::LoadDeps(Edge* edge, string* err) {
+  // 获取这个边的deps属性
   string deps_type = edge->GetBinding("deps");
   if (!deps_type.empty())
     return LoadDepsFromLog(edge, err);

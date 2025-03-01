@@ -98,6 +98,7 @@ struct NinjaMain : public BuildLogUser {
   const BuildConfig& config_;
 
   /// Loaded state (rules, nodes).
+   // 在NinjaMain初始化时，state_会被初始化
   State state_;
 
   /// Functions for accessing the disk.
@@ -262,11 +263,12 @@ int GuessParallelism() {
 /// Returns true if the manifest was rebuilt.
 bool NinjaMain::RebuildManifest(const char* input_file, string* err,
                                 Status* status) {
-  string path = input_file;
+  string path = input_file; // default: build.ninja
   if (path.empty()) {
     *err = "empty path";
     return false;
   }
+  // slash_bits 是一个位图，用于存储路径中斜杠（或反斜杠）的位置信息。在某些操作中这个信息很重要，但在这个特定的查找操作中不需要使用这个信息，所以注释提到它是未使用的。
   uint64_t slash_bits;  // Unused because this path is only used for lookup.
   CanonicalizePath(&path, &slash_bits);
   Node* node = state_.LookupNode(path);
@@ -278,6 +280,7 @@ bool NinjaMain::RebuildManifest(const char* input_file, string* err,
   if (!builder.AddTarget(node, err))
     return false;
 
+ // 如果 add target没有弄出来新东西的话，那就already up to date了，那就不用rebuild了
   if (builder.AlreadyUpToDate())
     return false;  // Not an error, but we didn't rebuild.
 
@@ -296,6 +299,7 @@ bool NinjaMain::RebuildManifest(const char* input_file, string* err,
   return true;
 }
 
+// 读取.ninja_log
 void NinjaMain::ParsePreviousElapsedTimes() {
   for (Edge* edge : state_.edges_) {
     for (Node* out : edge->outputs_) {
@@ -303,7 +307,7 @@ void NinjaMain::ParsePreviousElapsedTimes() {
       if (!log_entry)
         continue;  // Maybe we'll have log entry for next output of this edge?
       edge->prev_elapsed_time_millis =
-          log_entry->end_time - log_entry->start_time;
+          log_entry->end_time - log_entry->start_time; // 只需要一个就好了？因为一个edge的所有output的时间应该是一样的
       break;  // Onto next edge.
     }
   }
@@ -346,6 +350,7 @@ Node* NinjaMain::CollectTarget(const char* cpath, string* err) {
     }
     return node;
   } else {
+     //如果找不到Node，提供有帮助的错误信息，包括拼写建议, 所以说要构建的目标肯定需要做build.ninja里面能找到
     *err =
         "unknown target '" + Node::PathDecanonicalized(path, slash_bits) + "'";
     if (path == "clean") {
@@ -369,6 +374,7 @@ bool NinjaMain::CollectTargetsFromArgs(int argc, char* argv[],
     return err->empty();
   }
 
+// 遍历所有命令行参数，将每个参数转换为对应的Node对象
   for (int i = 0; i < argc; ++i) {
     Node* node = CollectTarget(argv[i], err);
     if (node == NULL)
@@ -1543,20 +1549,33 @@ bool NinjaMain::EnsureBuildDirExists() {
 
 ExitStatus NinjaMain::RunBuild(int argc, char** argv, Status* status) {
   string err;
+
+  // 收集目标
+  profiler.start("Collect Targets");
   vector<Node*> targets;
   if (!CollectTargetsFromArgs(argc, argv, &targets, &err)) {
     status->Error("%s", err.c_str());
+    profiler.end();  // Collect Targets
+    profiler.end();  // RunBuild Total
     return ExitFailure;
   }
+  profiler.end();  // Collect Targets
 
+  // 配置磁盘接口
+  profiler.start("Disk Interface Setup");
   disk_interface_.AllowStatCache(g_experimental_statcache);
+  profiler.end();
 
+  // 初始化Builder
+  profiler.start("Builder Initialization");
   Builder builder(&state_, config_, &build_log_, &deps_log_, &disk_interface_,
                   status, start_time_millis_);
   for (size_t i = 0; i < targets.size(); ++i) {
     if (!builder.AddTarget(targets[i], &err)) {
       if (!err.empty()) {
         status->Error("%s", err.c_str());
+        profiler.end();  // Builder Initialization
+        profiler.end();  // RunBuild Total
         return ExitFailure;
       } else {
         // Added a target that is already up-to-date; not really
@@ -1564,24 +1583,39 @@ ExitStatus NinjaMain::RunBuild(int argc, char** argv, Status* status) {
       }
     }
   }
+  profiler.end();  // Builder Initialization
 
-  // Make sure restat rules do not see stale timestamps.
+  // 禁用stat缓存
+  profiler.start("Disable Stat Cache");
   disk_interface_.AllowStatCache(false);
+  profiler.end();
 
+  // 检查是否已更新
+  profiler.start("Check Up-to-date");
   if (builder.AlreadyUpToDate()) {
     if (config_.verbosity != BuildConfig::NO_STATUS_UPDATE) {
       status->Info("no work to do.");
     }
+    profiler.end();  // Check Up-to-date
     return ExitSuccess;
   }
+  profiler.end();  // Check Up-to-date
 
+  // 执行构建
+  profiler.start("Build Execution");
   ExitStatus exit_status = builder.Build(&err);
+  profiler.end();  // Build Execution
+
+  // 处理构建结果
+  profiler.start("Handle Build Result");
   if (exit_status != ExitSuccess) {
     status->Info("build stopped: %s.", err.c_str());
     if (err.find("interrupted by user") != string::npos) {
+      profiler.end();  // Handle Build Result
       return ExitInterrupted;
     }
   }
+  profiler.end();  // Handle Build Result
 
   return exit_status;
 }
@@ -1725,19 +1759,31 @@ int ReadFlags(int* argc, char*** argv,
 NORETURN void real_main(int argc, char** argv) {
   // Use exit() instead of return in this function to avoid potentially
   // expensive cleanup when destructing NinjaMain.
+  profiler.rootStart();
+
+  // 初始化配置和选项
+  profiler.start("Initialization");
   BuildConfig config;
   Options options = {};
   options.input_file = "build.ninja";
 
   setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
   const char* ninja_command = argv[0];
+  profiler.end();
 
+  // 解析命令行参数
+  profiler.start("Read Flags");
   int exit_code = ReadFlags(&argc, &argv, &options, &config);
   if (exit_code >= 0)
     exit(exit_code);
+  profiler.end();
 
+  profiler.start("Status Setup");
   Status* status = Status::factory(config);
+  profiler.end();
 
+  // 处理工作目录
+  profiler.start("Working Directory Setup");
   if (options.working_dir) {
     // The formatting of this string, complete with funny quotes, is
     // so Emacs can properly identify that the cwd has changed for
@@ -1750,19 +1796,29 @@ NORETURN void real_main(int argc, char** argv) {
       Fatal("chdir to '%s' - %s", options.working_dir, strerror(errno));
     }
   }
+  profiler.end();
 
+  // 处理 RUN_AFTER_FLAGS 工具
+  profiler.start("Tool After Flags");
   if (options.tool && options.tool->when == Tool::RUN_AFTER_FLAGS) {
     // None of the RUN_AFTER_FLAGS actually use a NinjaMain, but it's needed
     // by other tools.
     NinjaMain ninja(ninja_command, config);
     exit((ninja.*options.tool->func)(&options, argc, argv));
   }
+  profiler.end();
 
   // Limit number of rebuilds, to prevent infinite loops.
-  const int kCycleLimit = 100;
+  const int kCycleLimit = 1;
   for (int cycle = 1; cycle <= kCycleLimit; ++cycle) {
-    NinjaMain ninja(ninja_command, config);
+    profiler.start("Build Cycle " + std::to_string(cycle));
 
+    profiler.start("Ninja Setup");
+    NinjaMain ninja(ninja_command, config);
+    profiler.end();
+
+    // 解析manifest
+    profiler.start("Manifest Parsing");
     ManifestParserOptions parser_opts;
     if (options.phony_cycle_should_err) {
       parser_opts.phony_cycle_action_ = kPhonyCycleActionError;
@@ -1773,37 +1829,77 @@ NORETURN void real_main(int argc, char** argv) {
       status->Error("%s", err.c_str());
       exit(1);
     }
+    profiler.end();
 
+    // RUN_AFTER_LOAD 工具
+    profiler.start("Tool After Load");
     if (options.tool && options.tool->when == Tool::RUN_AFTER_LOAD)
       exit((ninja.*options.tool->func)(&options, argc, argv));
+    profiler.end();
 
+    // 确保构建目录存在
+    profiler.start("Ensure Build Dir");
     if (!ninja.EnsureBuildDirExists())
       exit(1);
+    profiler.end();
 
+    // 打开日志
+    profiler.start("Open Logs");
     if (!ninja.OpenBuildLog() || !ninja.OpenDepsLog())
       exit(1);
+    profiler.end();
 
+    // RUN_AFTER_LOGS 工具
+    profiler.start("Tool After Logs");
     if (options.tool && options.tool->when == Tool::RUN_AFTER_LOGS)
       exit((ninja.*options.tool->func)(&options, argc, argv));
+    profiler.end();
 
     // Attempt to rebuild the manifest before building anything else
+    profiler.start("Rebuild Manifest");
     if (ninja.RebuildManifest(options.input_file, &err, status)) {
       // In dry_run mode the regeneration will succeed without changing the
       // manifest forever. Better to return immediately.
-      if (config.dry_run)
+      // 这句话的意思是：在dry_run（干运行）模式下，Ninja不会实际执行构建命令，只会模拟执行过程。结果是：
+      
+      // 当Ninja尝试重建清单文件时，它会检查是否需要重建，然后"假装"执行了构建命令
+      // 但实际上不会修改任何文件，包括清单文件
+      // 如果让程序继续运行，它会一直循环：检查清单 → 发现需要重建 → 假装重建 → 但实际清单没变 → 再次检查清单 → 重复...
+      
+      // 这会导致无限循环，所以代码在检测到这种情况时直接返回成功（exit(0)），避免无谓的循环。
+      if (config.dry_run) {
+        profiler.end();  // Rebuild Manifest
+        profiler.end();  // Build Cycle
         exit(0);
+      }
+      profiler.end();  // Rebuild Manifest
+      profiler.end();  // Build Cycle
       // Start the build over with the new manifest.
       continue;
     } else if (!err.empty()) {
       status->Error("rebuilding '%s': %s", options.input_file, err.c_str());
       exit(1);
     }
+    profiler.end();  // Rebuild Manifest
 
+    // 解析之前的时间
+    profiler.start("Parse Previous Times");
     ninja.ParsePreviousElapsedTimes();
+    profiler.end();
 
+    // 执行构建
+    profiler.start("Run Build");
     ExitStatus result = ninja.RunBuild(argc, argv, status);
+    profiler.end();
+
+    // 输出metrics
+    profiler.start("Dump Metrics");
     if (g_metrics)
       ninja.DumpMetrics();
+    profiler.end();
+
+    profiler.end();  // Build Cycle
+    profiler.rootEnd();
     exit(result);
   }
 

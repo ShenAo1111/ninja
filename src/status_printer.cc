@@ -58,7 +58,12 @@ void StatusPrinter::EdgeAddedToPlan(const Edge* edge) {
   ++total_edges_;
 
   // Do we know how long did this edge take last time?
+  // 如果不是 -1，说明我们知道它之前花了多久（比如 500 毫秒），可以用来预测。
   if (edge->prev_elapsed_time_millis != -1) {
+// ++eta_predictable_edges_total_;：总的可预测边数加 1。
+// ++eta_predictable_edges_remaining_;：还没做的可预测边数加 1。
+// eta_predictable_cpu_time_total_millis_ += ...;：总的可预测时间加上这次边的历史时间。
+// eta_predictable_cpu_time_remaining_millis_ += ...;：剩余的可预测时间也加上。
     ++eta_predictable_edges_total_;
     ++eta_predictable_edges_remaining_;
     eta_predictable_cpu_time_total_millis_ += edge->prev_elapsed_time_millis;
@@ -95,17 +100,20 @@ void StatusPrinter::BuildEdgeStarted(const Edge* edge,
     printer_.SetConsoleLocked(true);
 }
 
+// 这个函数重新计算构建进度（百分比），预测还剩多少时间。它结合已完成的时间和历史数据，估算总时间。
 void StatusPrinter::RecalculateProgressPrediction() {
+  // 把进度百分比清零，准备重新算
   time_predicted_percentage_ = 0.0;
 
   // Sometimes, the previous and actual times may be wildly different.
-  // For example, the previous build may have been fully recovered from ccache,
+  // For example, the previous build may have been fully recovered from ccache, ccache是很重要的看来
   // so it was blazing fast, while the new build no longer gets hits from ccache
   // for whatever reason, so it actually compiles code, which takes much longer.
   // We should detect such cases, and avoid using "wrong" previous times.
 
   // Note that we will only use the previous times if there are edges with
   // previous time knowledge remaining.
+  //如果还有可预测的边（eta_predictable_edges_remaining_）和时间（eta_predictable_cpu_time_remaining_millis_），就考虑用历史时间
   bool use_previous_times = eta_predictable_edges_remaining_ &&
                             eta_predictable_cpu_time_remaining_millis_;
 

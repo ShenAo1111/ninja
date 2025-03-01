@@ -50,7 +50,13 @@ struct Plan {
   Edge* FindWork();
 
   /// Returns true if there's more work to be done.
-  bool more_to_do() const { return wanted_edges_ > 0 && command_edges_ > 0; }
+  bool more_to_do() const { 
+    std::cout << "Checking more_to_do: " 
+    << "wanted_edges_ = " << wanted_edges_ 
+    << ", command_edges_ = " << command_edges_ 
+    << std::endl;
+    return wanted_edges_ > 0 && command_edges_ > 0; 
+  }
 
   /// Dumps the current state of the plan.
   void Dump() const;
@@ -227,6 +233,7 @@ struct Builder {
   /// Load the dyndep information provided by the given node.
   bool LoadDyndeps(Node* node, std::string* err);
 
+  // 只是初始化个空的在这里
   State* state_;
   const BuildConfig& config_;
   Plan plan_;

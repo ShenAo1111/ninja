@@ -74,6 +74,7 @@ bool Rule::IsPhony() const {
 }
 
 // static
+// 只支持这些变量
 bool Rule::IsReservedBinding(const string& var) {
   return var == "command" ||
       var == "depfile" ||
